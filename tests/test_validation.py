@@ -26,6 +26,57 @@ class ScenarioTests(unittest.TestCase):
 
 
 class EvidenceGateTests(unittest.TestCase):
+    def test_incomplete_year_search_gets_completeness_revision(self):
+        question = 'Tôi cần danh sách đầy đủ tất cả incident GitHub Actions trong năm 2025.'
+        fake = FakeProvider([
+            tool_call('1', 'get_status', '{"provider":"github","component":"Actions"}'),
+            final(
+                'Không có incident nào cụ thể cho GitHub Actions trong năm 2025. '
+                'Chỉ kiểm tra 50 incident gần nhất; điều này không chứng minh '
+                'rằng không có sự cố.'
+            ),
+            final(
+                'Snapshot chỉ bao gồm 50 incident gần nhất; không thể chứng minh '
+                'danh sách đầy đủ cho năm 2025. Không tìm thấy trong phạm vi đó '
+                'không chứng minh là không có incident trong năm.'
+            )
+        ])
+        result = run_agent(question, fake, StatusTools(), max_steps=4)
+        self.assertEqual(result['status'], 'completed')
+        self.assertTrue(any(
+            event['event'] == 'validation_missing_completeness_caveat'
+            for event in result['trace']
+        ))
+        self.assertIn('không thể chứng minh', result['answer'])
+        self.assertIn('không chứng minh là không có', result['answer'])
+
+    def test_completeness_gate_requires_year_request_and_successful_status(self):
+        ordinary_question = 'GitHub Actions hiện có sự cố không?'
+        ordinary_provider = FakeProvider([
+            tool_call('1', 'get_status', '{"provider":"github","component":"Actions"}'),
+            final('GitHub Actions đang hoạt động bình thường.')
+        ])
+        ordinary_result = run_agent(ordinary_question, ordinary_provider, StatusTools())
+        self.assertEqual(ordinary_result['status'], 'completed')
+        self.assertFalse(any(
+            event['event'] == 'validation_missing_completeness_caveat'
+            for event in ordinary_result['trace']
+        ))
+
+        historical_question = 'Liệt kê tất cả incident trong năm 2025.'
+        failed_provider = FakeProvider([
+            tool_call('1', 'get_status', '{"provider":"github","component":"Actions"}'),
+            final('Không lấy được dữ liệu status.')
+        ])
+        failed_result = run_agent(
+            historical_question, failed_provider, StatusTools(fail=True)
+        )
+        self.assertEqual(failed_result['status'], 'completed')
+        self.assertFalse(any(
+            event['event'] == 'validation_missing_completeness_caveat'
+            for event in failed_result['trace']
+        ))
+
     def test_missing_url_gets_revision_within_budget(self):
         url = 'https://stspg.io/pjgptg3cfc6n'
         fake = FakeProvider([tool_call('1', 'get_incident_details', '{"provider":"github","incident_id":"xr3myzj7ms51"}'),
